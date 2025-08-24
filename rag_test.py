@@ -1,75 +1,65 @@
+# rag_test.py
 import os
-from dotenv import load_dotenv
-from notion_client import Client
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from notion_fetcher import load_notion_docs
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_ollama import ChatOllama
+from langchain_ollama import OllamaLLM
+from langchain.chains import RetrievalQA
 from langchain_community.vectorstores import Chroma
 
-load_dotenv()
-notion = Client(auth=os.getenv("NOTION_API_KEY"))
+print("📥 Fetching docs from Notion...")
+docs = load_notion_docs()
 
-# -------------------
-# 1) fetch notion pages
-# -------------------
-def extract_text(blocks, depth=0):
-    out = []
-    for b in blocks:
-        t = b.get("type")
-        data = b.get(t, {})
-        if "rich_text" in data:
-            text = "".join([r.get("plain_text", "") for r in data["rich_text"]])
-            if text.strip():
-                out.append(text)
-        if b.get("has_children"):
-            child_id = b["id"]
-            children = notion.blocks.children.list(block_id=child_id).get("results", [])
-            out.append(extract_text(children, depth + 1))
-    return "\n".join([x for x in out if x])
+raw_texts = []
+metadatas = []
 
-page_ids = [pid.strip() for pid in os.getenv("NOTION_PAGE_IDS", "").split(",") if pid.strip()]
+for d in docs:
+    text = d.get("text", "").strip()
+    if not text:
+        print(f"⚠️ Doc #{d.get('id', 'unknown')} was empty, skipping.")
+        continue
+    raw_texts.append(text)
+    metadatas.append({"source": d.get("id", "unknown")})
 
-all_text = []
-for pid in page_ids:
-    blocks = notion.blocks.children.list(block_id=pid).get("results", [])
-    text = extract_text(blocks)
-    all_text.append(text)
+if not raw_texts:
+    raise ValueError("❌ No text found in Notion docs. Check fetch_page_content!")
 
-docs_raw = "\n".join(all_text)
+# Split into chunks
+print("✂️ Splitting into chunks...")
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
 
-# -------------------
-# 2) chunk + embed
-# -------------------
-splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-docs = splitter.split_text(docs_raw)
+all_chunks = []
+all_metadatas = []
 
-emb = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-vs = Chroma.from_texts(docs, emb, persist_directory="./notion_chroma")
+for text, meta in zip(raw_texts, metadatas):
+    chunks = text_splitter.split_text(text)
+    all_chunks.extend(chunks)
+    all_metadatas.extend([meta] * len(chunks))
 
-# -------------------
-# 3) query function
-# -------------------
-llm = ChatOllama(model="gemma:2b")
+print(f"✅ Total chunks: {len(all_chunks)}")
 
-def ask(query):
-    hits = vs.similarity_search(query, k=3)
-    context = "\n".join([h.page_content for h in hits])
-    prompt = f"""You are an assistant that answers questions using company docs.
-Context:
-{context}
+# Embeddings
+print("🧠 Creating embeddings...")
+embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-Question: {query}
-Answer:"""
-    resp = llm.invoke(prompt)
-    return resp.content
+vectorstore = Chroma.from_texts(all_chunks, embedding=embedding_model, metadatas=all_metadatas)
 
-# -------------------
-# 4) demo
-# -------------------
-if __name__ == "__main__":
-    while True:
-        q = input("❓ Ask a question (or 'quit'): ")
-        if q.lower() in ["quit", "exit"]:
-            break
-        ans = ask(q)
-        print("💡 Answer:", ans, "\n")
+# LLM
+print("🤖 Loading Gemma 2B...")
+llm = OllamaLLM(model="gemma:2b")
+
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    retriever=vectorstore.as_retriever(search_kwargs={"k": 3}),
+    return_source_documents=True,
+)
+
+while True:
+    query = input("\nAsk a question (or type 'exit'): ")
+    if query.lower() == "exit":
+        break
+
+    print(f"\n❓ Question: {query}")
+    result = qa_chain.invoke({"query": query})
+    print(f"💡 Answer: {result['result']}")
+    print("📚 Sources:", [d.metadata.get("source", "unknown") for d in result["source_documents"]])

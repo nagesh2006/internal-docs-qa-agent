@@ -9,9 +9,9 @@ __pycache__/
 
 # data
 notion_chroma/
+gdocs_chroma/
 *.db
 
 # env + creds
 .env
-credentials.json
-token.json
+*.json
