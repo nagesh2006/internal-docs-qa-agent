@@ -1,12 +1,42 @@
 # fetch_gdocs.py
 import os
+import json
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 load_dotenv()
 
-GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS_PATH", "./gcreds.json")
+# Load credentials either from env var or file
+GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")  # whole JSON as string (for Hugging Face)
+GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS_PATH", "./gcreds.json")  # fallback local file
+
+
+def get_credentials():
+    """Return Google service account credentials."""
+    if GOOGLE_CREDS_JSON:
+        creds_dict = json.loads(GOOGLE_CREDS_JSON)
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict,
+            scopes=[
+                "https://www.googleapis.com/auth/documents.readonly",
+                "https://www.googleapis.com/auth/drive.readonly",
+            ],
+        )
+        return creds
+
+    elif GOOGLE_CREDS_PATH and os.path.exists(GOOGLE_CREDS_PATH):
+        creds = service_account.Credentials.from_service_account_file(
+            GOOGLE_CREDS_PATH,
+            scopes=[
+                "https://www.googleapis.com/auth/documents.readonly",
+                "https://www.googleapis.com/auth/drive.readonly",
+            ],
+        )
+        return creds
+
+    else:
+        raise ValueError("❌ No valid Google credentials found. Set GOOGLE_CREDS_JSON or GOOGLE_CREDS_PATH.")
 
 
 def fetch_doc_content(doc_id, docs_service):
@@ -38,17 +68,7 @@ def fetch_doc_content(doc_id, docs_service):
 
 def fetch_all_shared_docs():
     """Fetch all Google Docs shared with the service account."""
-    if not GOOGLE_CREDS_PATH or not os.path.exists(GOOGLE_CREDS_PATH):
-        print("⚠️ Missing GOOGLE_CREDS_PATH in .env or file not found.")
-        return []
-
-    creds = service_account.Credentials.from_service_account_file(
-        GOOGLE_CREDS_PATH,
-        scopes=[
-            "https://www.googleapis.com/auth/documents.readonly",
-            "https://www.googleapis.com/auth/drive.readonly",
-        ],
-    )
+    creds = get_credentials()
 
     # Build services
     drive_service = build("drive", "v3", credentials=creds)
