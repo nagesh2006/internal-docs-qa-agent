@@ -1,13 +1,22 @@
-streamlit
-python-dotenv
-notion-client
-google-api-python-client
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-langchain
-langchain-community
-langchain-ollama
-langchain-huggingface
-chromadb
-transformers
+# UI
+streamlit>=1.32.0
+python-dotenv>=1.0.1
+
+# Data sources
+notion-client>=2.2.1
+google-api-python-client>=2.127.0
+google-auth>=2.29.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+
+# LangChain + integrations
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-huggingface>=0.0.3
+
+# Vector DB
+chromadb>=0.5.0
+
+# Hugging Face models/embeddings
+transformers>=4.41.0
+sentence-transformers>=2.7.0

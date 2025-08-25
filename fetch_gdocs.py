@@ -6,23 +6,19 @@ from googleapiclient.discovery import build
 
 load_dotenv()
 
-# Google Service Account JSON file (download from GCP console)
-GOOGLE_CREDS_FILE = os.getenv("GOOGLE_CREDS_FILE")
-# Comma-separated list of Google Doc IDs to index
-GOOGLE_DOC_IDS = os.getenv("GOOGLE_DOC_IDS", "").split(",")
+GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS_PATH", "./gcreds.json")
 
 
-def fetch_doc_content(doc_id, service):
-    """Fetch full plain text from a Google Doc."""
-    doc = service.documents().get(documentId=doc_id).execute()
+def fetch_doc_content(doc_id, docs_service):
+    """Fetch plain text from a Google Doc by ID."""
+    doc = docs_service.documents().get(documentId=doc_id).execute()
     content = []
 
     def read_elements(elements):
         text_out = []
         for elem in elements:
             if "paragraph" in elem:
-                parts = elem["paragraph"].get("elements", [])
-                for part in parts:
+                for part in elem["paragraph"].get("elements", []):
                     if "textRun" in part:
                         txt = part["textRun"].get("content", "")
                         if txt.strip():
@@ -37,40 +33,53 @@ def fetch_doc_content(doc_id, service):
 
     body = doc.get("body", {}).get("content", [])
     content.extend(read_elements(body))
-
     return "".join(content).strip()
 
 
-def fetch_gdocs_docs():
-    """Fetch all configured Google Docs as text docs."""
-    if not GOOGLE_CREDS_FILE or not os.path.exists(GOOGLE_CREDS_FILE):
-        print("⚠️ Missing GOOGLE_CREDS_FILE in .env or file not found.")
-        return []
-
-    if not GOOGLE_DOC_IDS or GOOGLE_DOC_IDS == [""]:
-        print("⚠️ No GOOGLE_DOC_IDS configured in .env")
+def fetch_all_shared_docs():
+    """Fetch all Google Docs shared with the service account."""
+    if not GOOGLE_CREDS_PATH or not os.path.exists(GOOGLE_CREDS_PATH):
+        print("⚠️ Missing GOOGLE_CREDS_PATH in .env or file not found.")
         return []
 
     creds = service_account.Credentials.from_service_account_file(
-        GOOGLE_CREDS_FILE,
-        scopes=["https://www.googleapis.com/auth/documents.readonly"],
+        GOOGLE_CREDS_PATH,
+        scopes=[
+            "https://www.googleapis.com/auth/documents.readonly",
+            "https://www.googleapis.com/auth/drive.readonly",
+        ],
     )
-    service = build("docs", "v1", credentials=creds)
 
+    # Build services
+    drive_service = build("drive", "v3", credentials=creds)
+    docs_service = build("docs", "v1", credentials=creds)
+
+    # Search all Google Docs (files of type 'document') that service account has access to
+    results = drive_service.files().list(
+        q="mimeType='application/vnd.google-apps.document'",
+        pageSize=50,
+        fields="files(id, name)",
+    ).execute()
+
+    files = results.get("files", [])
     docs = []
-    for doc_id in GOOGLE_DOC_IDS:
-        doc_id = doc_id.strip()
-        if not doc_id:
-            continue
 
+    for f in files:
+        doc_id = f["id"]
+        name = f["name"]
         try:
-            print(f"📄 Fetching Google Doc: {doc_id}")
-            text = fetch_doc_content(doc_id, service)
+            print(f"📄 Fetching Google Doc: {name} ({doc_id})")
+            text = fetch_doc_content(doc_id, docs_service)
             if text:
-                docs.append({"id": doc_id, "text": text})
+                docs.append({"id": doc_id, "name": name, "text": text})
             else:
-                print(f"⚠️ Google Doc {doc_id} was empty, skipping.")
+                print(f"⚠️ Google Doc {name} was empty, skipping.")
         except Exception as e:
-            print(f"⚠️ Failed to fetch Google Doc {doc_id}: {e}")
+            print(f"⚠️ Failed to fetch Google Doc {name}: {e}")
 
     return docs
+
+
+if __name__ == "__main__":
+    all_docs = fetch_all_shared_docs()
+    print(f"✅ Fetched {len(all_docs)} documents")
